@@ -1,0 +1,1153 @@
+RepositoryLayers->Folder->Interface->IAuthRL.cs
+
+using CommonLayer.Models;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace RepositoryLayers.Interface
+{
+    public interface IAuthRL
+    {
+        public Task<SignUpResponse> SignUp(SignUpRequest request);
+        public Task<SignInResponse> SignIn(SignInRequest request);
+        public Task<CustomerListResponse> CustomerList(CustomerListRequest request);
+        public Task<AddCustomerDetailResponse> AddCustomerDetail(AddCustomerDetailRequest request);
+        public Task<GetCustomerDetailResponse> GetCustomerDetail(int UserID);
+        public Task<AddCustomerAdderessResponse> AddCustomerAdderess(AddCustomerAdderessRequest request);
+        public Task<GetCustomerAdderessResponse> GetCustomerAdderess(int UserID);
+    }
+}
+
+
+
+
+
+RepositoryLayers->Folder->Services->AuthRL.cs
+
+
+using CommonLayer;
+using CommonLayer.Models;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
+using Newtonsoft.Json;
+using RepositoryLayers.Interface;
+using System;
+using System.Collections.Generic;
+using System.Data;
+using System.Data.Common;
+using System.Data.SqlClient;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace RepositoryLayers.Services
+{
+    public class AuthRL : IAuthRL
+    {
+        private readonly IConfiguration _configuration;
+        private readonly SqlConnection _SqlConnection;
+        private readonly ILogger<AuthRL> _logger;
+        private readonly ApplicationDbContext _dbContext;
+        public AuthRL(IConfiguration configuration, ILogger<AuthRL> logger, ApplicationDbContext dbContext)
+        {
+            _logger = logger;
+            _configuration = configuration;
+            _SqlConnection = new SqlConnection(_configuration["ConnectionStrings:DBSettingConnection"]);
+            _dbContext = dbContext;
+        }
+
+        public async Task<AddCustomerAdderessResponse> AddCustomerAdderess(AddCustomerAdderessRequest request)
+        {
+            AddCustomerAdderessResponse response = new AddCustomerAdderessResponse();
+            response.IsSuccess = true;
+            
+            try
+            {
+
+                var UserDetails =  _dbContext.AddressDetails
+                    .Where(X=>X.UserID==request.UserID)
+                    .FirstOrDefault();
+
+                if (UserDetails == null)
+                {
+                    response.Message = "Add Customer Address Successful";
+                    AddressDetails addressDetails = new AddressDetails()
+                    {
+                        UserID = request.UserID,
+                        Address1 = request.Address1,
+                        Address2 = request.Address2,
+                        City = request.City,
+                        Distict = request.Distict,
+                        State = request.State,
+                        Country = request.Country,
+                        pincode = request.pincode
+                    };
+                    await _dbContext.AddAsync(addressDetails);
+                    
+                }
+                else
+                {
+                    response.Message = "Update Customer Address Successful";
+                    UserDetails.Address1 = request.Address1;
+                    UserDetails.Address2 = request.Address2;
+                    UserDetails.City = request.City;
+                    UserDetails.Distict = request.Distict;
+                    UserDetails.State = request.State;
+                    UserDetails.Country = request.Country;
+                }
+                int Result = await _dbContext.SaveChangesAsync();
+                if (Result <= 0)
+                {
+                    response.IsSuccess = false;
+                    response.Message = "Something Went Wrong";
+                }
+
+            }
+            catch (Exception ex)
+            {
+                response.IsSuccess = false;
+                response.Message = "Exception Message : " + ex.Message;
+            }
+            finally
+            {
+                await _SqlConnection.CloseAsync();
+                await _SqlConnection.DisposeAsync();
+            }
+
+            return response;
+        }
+
+        public async Task<AddCustomerDetailResponse> AddCustomerDetail(AddCustomerDetailRequest request)
+        {
+            AddCustomerDetailResponse response = new AddCustomerDetailResponse();
+            response.IsSuccess = true;
+            
+            try
+            {
+
+                var CustomerDetails = _dbContext.CustomerDetails
+                                                        .Where(X => X.UserID == request.UserID)
+                                                        .FirstOrDefault();
+
+                if (CustomerDetails == null)
+                {
+                    response.Message = "Add Customer Detail Successful";
+                    CustomerDetails customerDetails = new CustomerDetails();
+                    customerDetails.InsertionDate = DateTime.Now;
+                    customerDetails.FullName = request.FullName;
+                    customerDetails.EmailID = request.EmailID;
+                    customerDetails.MobileNumber = request.MobileNumber;
+                    customerDetails.UserName = request.UserName;
+                    customerDetails.UserID = request.UserID;
+                    await _dbContext.AddAsync(customerDetails);
+                }
+                else
+                {
+                    response.Message = "Update Customer Detail Successful";
+                    CustomerDetails.UpdationDate = DateTime.Now;
+                    CustomerDetails.FullName = request.FullName;
+                    CustomerDetails.EmailID = request.EmailID;
+                    CustomerDetails.MobileNumber = request.MobileNumber;
+                    //await _dbContext.AddAsync(CustomerDetails);
+                }
+
+                int Result = await _dbContext.SaveChangesAsync();
+                if (Result <= 0)
+                {
+                    response.IsSuccess = false;
+                    response.Message = "Something Went Wrong";
+                }
+
+            }
+            catch (Exception ex)
+            {
+                response.IsSuccess = false;
+                response.Message = "Exception Occurs : Message : " + ex.Message;
+            }
+            finally
+            {
+                await _SqlConnection.CloseAsync();
+                await _SqlConnection.DisposeAsync();
+            }
+
+            return response;
+        }
+
+        // Left Join
+        public async Task<CustomerListResponse> CustomerList(CustomerListRequest request)
+        {
+            CustomerListResponse response = new CustomerListResponse();
+            response.IsSuccess = true;
+            response.Message = "Fetch Customer List Successfully";
+            try
+            {
+
+                string SqlQuery = @"SELECT C.ID,C.InsertionDate,C.FullName,C.EmailID,C.MobileNumber,C.IsActive U.UserID, U.UserName,
+                                    (SELECT COUNT(*) FROM UserDetail WHERE Role='customer') AS TotalRecord
+                                    FROM  UserDetail U
+                                    left join CustomerDetails C
+                                    on U.UserId = C.UserID
+                                    Where U.Role='customer'
+                                    ORDER BY ID DESC
+                                   OFFSET @Offset ROWS FETCH NEXT @NumberOfRecordPerPage ROWS ONLY;";
+
+                var Result = (from U in _dbContext.UserDetail
+                              join C in _dbContext.CustomerDetails
+                              on U.UserId equals C.UserID
+                              into CustomerDetail
+                              from m in CustomerDetail.DefaultIfEmpty()
+                              where U.Role == "customer"
+                              select new
+                              {
+                                  ID = m.ID != null ? m.ID : -1,
+                                  InsertionDate = m.InsertionDate != null ? m.InsertionDate.ToString() : "",
+                                  FullName = m.FullName != null ? m.FullName : "",
+                                  EmailID = m.EmailID != null ? m.EmailID : "",
+                                  MobileNumber = m.MobileNumber != null ? m.MobileNumber : "",
+                                  IsActive = m.IsActive != null ? m.IsActive : false,
+                                  UserID = U.UserId,
+                                  UserName = U.UserName
+                              }).OrderByDescending(X => X.ID)
+                              .Skip(request.NumberOfRecordPerPage * (request.PageNumber - 1))
+                              .Take(request.NumberOfRecordPerPage)
+                              .ToList();
+
+                if (Result.Count == 0)
+                {
+                    response.IsSuccess = false;
+                    response.Message = "Customers Not Found";
+                    return response;
+                }
+
+                response.data = new List<CustomerList>();
+                foreach (var data in Result)
+                {
+                    CustomerList CustomerData = new CustomerList();
+                    CustomerData.EmailID = data.EmailID;
+                    CustomerData.FullName = data.FullName;
+                    CustomerData.ID = data.ID;
+                    CustomerData.InsertionDate = String.IsNullOrEmpty(data.InsertionDate) ? "" : Convert.ToDateTime(data.InsertionDate).ToString("dddd, dd-MM-yyyy, HH:mm tt");
+                    CustomerData.IsActive = data.IsActive;
+                    CustomerData.MobileNumber = data.MobileNumber;
+                    CustomerData.UserID = data.UserID;
+                    CustomerData.UserName = data.UserName;
+                    response.data.Add(CustomerData);
+                }
+
+
+                response.TotalRecords = _dbContext.UserDetail.Where(X => X.Role == "customer").Count();
+                response.TotalPage = Convert.ToInt32(Math.Ceiling(Convert.ToDecimal(response.TotalRecords / request.NumberOfRecordPerPage)));
+                response.CurrentPage = request.PageNumber;
+
+
+            }
+            catch (Exception ex)
+            {
+                response.IsSuccess = false;
+                response.Message = "Exception Message : " + ex.Message;
+            }
+            finally
+            {
+                await _SqlConnection.CloseAsync();
+                await _SqlConnection.DisposeAsync();
+            }
+
+            return response;
+        }
+
+        public async Task<GetCustomerAdderessResponse> GetCustomerAdderess(int UserID)
+        {
+            GetCustomerAdderessResponse response = new GetCustomerAdderessResponse();
+            response.IsSuccess = true;
+            response.Message = "Get Customer Address Successful";
+            try
+            {
+
+                string SqlQuery = @"SELECT Address1, Address2, City, Distict, State, Country, pincode 
+                                   FROM AddressDetails 
+                                    WHERE UserID=@UserID";
+
+                var SearchResult = _dbContext.AddressDetails.Where(X => X.UserID == UserID).FirstOrDefault();
+                if (SearchResult == null)
+                {
+                    response.IsSuccess = false;
+                    response.Message = "User Address not found";
+                    return response;
+                }
+
+                response.data = new GetCustomerAdderess();
+                response.data.Address1 = SearchResult.Address1;
+                response.data.Address2 = SearchResult.Address2;
+                response.data.City = SearchResult.City;
+                response.data.Distict = SearchResult.Distict;
+                response.data.State = SearchResult.State;
+                response.data.Country = SearchResult.Country;
+                response.data.pincode = SearchResult.pincode;
+
+            }
+            catch (Exception ex)
+            {
+                response.IsSuccess = false;
+                response.Message = "Exception Message : " + ex.Message;
+            }
+            finally
+            {
+                await _SqlConnection.CloseAsync();
+                await _SqlConnection.DisposeAsync();
+            }
+
+            return response;
+        }
+
+        public async Task<GetCustomerDetailResponse> GetCustomerDetail(int UserID)
+        {
+            GetCustomerDetailResponse response = new GetCustomerDetailResponse();
+            response.data = new GetCustomerDetail();
+            response.IsSuccess = true;
+            response.Message = "Get Customer Detail Successful";
+            try
+            {
+
+                if (_SqlConnection != null && _SqlConnection.State != ConnectionState.Open)
+                {
+                    await _SqlConnection.OpenAsync();
+                }
+
+                string SqlQuery = @"SELECT FullName ,EmailID, MobileNumber 
+                                   FROM CustomerDetails 
+                                    WHERE UserID=@UserID";
+
+                var SearchResult = _dbContext.CustomerDetails.Where(X => X.UserID == UserID).FirstOrDefault();
+                if (SearchResult == null)
+                {
+                    response.IsSuccess = false;
+                    response.Message = "Customer Details Not Found";
+                    return response;
+                }
+
+                response.data.FullName = SearchResult.FullName;
+                response.data.EmailID = SearchResult.EmailID;
+                response.data.MobileNumber = SearchResult.MobileNumber;
+
+            }
+            catch (Exception ex)
+            {
+                response.IsSuccess = false;
+                response.Message = "Exception Message : " + ex.Message;
+            }
+            finally
+            {
+                await _SqlConnection.CloseAsync();
+                await _SqlConnection.DisposeAsync();
+            }
+
+            return response;
+        }
+
+        public async Task<SignInResponse> SignIn(SignInRequest request)
+        {
+            SignInResponse response = new SignInResponse();
+            response.IsSuccess = true;
+            response.Message = "Login Successful";
+            try
+            {
+                _logger.LogInformation($"SignIn In DataAccessLayer Calling .... {JsonConvert.SerializeObject(request)}");
+
+                var SearchResult = _dbContext.UserDetail.Where(X => X.UserName == request.UserName &&
+                                                                                        X.PassWord == request.Password &&
+                                                                                        X.Role == request.Role.ToLower()).FirstOrDefault();
+
+                if (SearchResult == null)
+                {
+                    response.Message = "User Login Failed";
+                }
+                else
+                {
+                    response.data = new SignIn();
+                    response.data.InsertionDate = Convert.ToString(SearchResult.InsertionDate);
+                    response.data.UserId = SearchResult.UserId;
+                    response.data.UserName = SearchResult.UserName;
+                    response.data.Role = request.Role;
+                }
+
+            }
+            catch (Exception ex)
+            {
+                response.IsSuccess = false;
+                response.Message = ex.Message;
+                _logger.LogError($"Exception Occurs : Message 1 : {ex.Message}");
+
+            }
+            finally
+            {
+                await _SqlConnection.CloseAsync();
+                await _SqlConnection.DisposeAsync();
+            }
+
+            return response;
+        }
+
+        public async Task<SignUpResponse> SignUp(SignUpRequest request)
+        {
+            SignUpResponse response = new SignUpResponse();
+            response.IsSuccess = true;
+            response.Message = "Sign Up Successful";
+            try
+            {
+                _logger.LogInformation($"SignUp In DataAccessLayer Calling .... Request Body {JsonConvert.SerializeObject(request)}");
+
+                var SearchResult = _dbContext.UserDetail.Where(X => X.UserName == request.UserName).FirstOrDefault();
+                if (SearchResult != null)
+                {
+                    response.Message = "UserName Already Exist.";
+                    return response;
+                }
+
+                if (request.Password != request.ConfigPassword)
+                {
+                    response.Message = "Password and ConfirmPassword Not Match";
+                    return response;
+                }
+
+                if (request.Role.ToLower() == "admin")
+                {
+                    if (request.MasterPassword != "India@123")
+                    {
+                        response.Message = "InCorrect Master Password";
+                        return response;
+                    }
+                }
+
+                UserDetail RequestBody = new UserDetail()
+                {
+                    UserName = request.UserName,
+                    Role = request.Role.ToLower(),
+                    PassWord = request.Password
+                };
+
+                await _dbContext.AddAsync(RequestBody);
+                int Result = await _dbContext.SaveChangesAsync();
+                if (Result <= 0)
+                {
+                    response.IsSuccess = false;
+                    response.Message = "Something Went Wrong";
+                }
+
+
+            }
+            catch (Exception ex)
+            {
+                response.IsSuccess = false;
+                response.Message = ex.Message;
+                _logger.LogError($"Exception Occurs : Message 2 : {ex.Message}");
+            }
+            finally
+            {
+                await _SqlConnection.CloseAsync();
+                await _SqlConnection.DisposeAsync();
+            }
+
+            return response;
+        }
+
+    }
+}
+
+
+CommonLayer -> ApplicationDbContext.cs
+
+
+using CommonLayer.Models;
+using Microsoft.EntityFrameworkCore;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace CommonLayer
+{
+    public class ApplicationDbContext : DbContext
+    {
+        public ApplicationDbContext(DbContextOptions<ApplicationDbContext> dbContextOptions) : base(dbContextOptions)
+        {
+
+        }
+
+        public DbSet<UserDetail> UserDetail { get; set; }
+
+        public DbSet<AddressDetails> AddressDetails { get; set; }
+
+        public DbSet<CardDetails> CardDetails { get; set; }
+
+        public DbSet<CustomerDetails> CustomerDetails { get; set; }
+
+        public DbSet<FeedbackDetail> FeedbackDetail { get; set; }
+
+        public DbSet<ProductDetails> ProductDetails { get; set; }
+
+        public DbSet<WishListDetails> WishListDetails { get; set; }
+    }
+}
+
+
+
+CommonLayer -> Folder(Models)
+
+DataBaseTables.cs
+
+using System;
+using System.Collections.Generic;
+using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations.Schema;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace CommonLayer.Models
+{
+    public class AddressDetails
+    {
+        [Key]
+        [DatabaseGenerated(DatabaseGeneratedOption.Identity)]
+        public int ID { get; set; }
+        public DateTime InsertionDate { get; set; } = DateTime.Now;
+        public DateTime UpdationDate { get; set; }
+        public int UserID { get; set; }
+        public string Address1 { get; set; }
+        public string Address2 { get; set; }
+        public string City { get; set; }
+        public string Distict { get; set; }
+        public string State { get; set; }
+        public string Country { get; set; }
+        public string pincode { get; set; }
+        public bool IsActive { get; set; } = true;
+    }
+
+    public class CardDetails
+    {
+        [Key]
+        [DatabaseGenerated(DatabaseGeneratedOption.Identity)]
+        public int CardID { get; set; }
+        public int UserId { get; set; }
+        public DateTime InsertionDate { get; set; } = DateTime.Now;
+        public int ProductID { get; set; }
+        public bool IsOrder { get; set; }
+        public bool IsActive { get; set; } = true;
+    }
+
+    public class CustomerDetails
+    {
+        [Key]
+        [DatabaseGenerated(DatabaseGeneratedOption.Identity)]
+        public int ID { get; set; }
+        public int UserID { get; set; }
+        public string UserName { get; set; }
+        public DateTime InsertionDate { get; set; } = DateTime.Now;
+        public DateTime UpdationDate { get; set; }
+        public string FullName { get; set; }
+        public string EmailID { get; set; }
+        public string MobileNumber { get; set; }
+        public bool IsActive { get; set; } = true;
+    }
+
+    public class FeedbackDetail
+    {
+        [Key]
+        [DatabaseGenerated(DatabaseGeneratedOption.Identity)]
+        public int FeedbackID { get; set; }
+        public DateTime InsertionDate { get; set; } = DateTime.Now;
+        public int UserID { get; set; }
+        public string Feedback { get; set; }
+    }
+
+    public class ProductDetails
+    {
+        [Key]
+        [DatabaseGenerated(DatabaseGeneratedOption.Identity)]
+        public int ProductID { get; set; }
+        public DateTime InsertionDate { get; set; } = DateTime.Now;
+        public DateTime UpdateDate { get; set; }
+        public string ProductName { get; set; }
+        public string ProductType { get; set; }
+        public string ProductPrice { get; set; }
+        public string ProductDetail { get; set; }
+        public string ProductCompany { get; set; }
+        public string ProductImageUrl { get; set; }
+        public string PublicId { get; set; }
+        public int Quantity { get; set; }
+        public string Rating { get; set; }
+        public bool IsArchive { get; set; } = false;
+        public bool IsActive { get; set; } = true;
+    }
+
+    public class UserDetail
+    {
+        [Key]
+        [DatabaseGenerated(DatabaseGeneratedOption.Identity)]
+        public int UserId { get; set; }
+        public string UserName { get; set; }
+        public string PassWord { get; set; }
+        public string Role { get; set; } // 'customer', 'admin', 'master'
+        public DateTime InsertionDate { get; set; } = DateTime.Now;
+        public bool IsActive { get; set; } = true;
+    }
+
+    public class WishListDetails {
+        [Key]
+        [DatabaseGenerated(DatabaseGeneratedOption.Identity)]
+        public int WishListID { get; set; }
+        public int UserId { get; set; }
+        public DateTime InsertionDate { get; set; } = DateTime.Now;
+        public int ProductID {get; set;}
+        public bool IsActive { get; set; } = true;
+        }
+
+}
+
+SignIn.cs
+
+using System;
+using System.Collections.Generic;
+using System.ComponentModel.DataAnnotations;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace CommonLayer.Models
+{
+    public class SignInRequest
+    {
+        [Required]
+        public string UserName { get; set; }
+
+        [Required]
+        public string Password { get; set; }
+
+        [Required]
+        public string Role { get; set; }
+    }
+
+    public class SignInResponse
+    {
+        public bool IsSuccess { get; set; }
+        public string Message { get; set; }
+        public SignIn data { get; set; }
+    }
+
+    public class SignIn
+    {
+        public int UserId { get; set; }
+        public string UserName { get; set; }
+        public string Role { get; set; }
+        public string InsertionDate { get; set; }
+        public string Token { get; set; }
+    }
+}
+
+
+SignUp.cs
+
+using System;
+using System.Collections.Generic;
+using System.ComponentModel.DataAnnotations;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace CommonLayer.Models
+{
+    public class SignUpRequest
+    {
+        //UserName, PassWord, Role
+        [Required]
+        public string UserName { get; set; }
+
+        [Required]
+        public string Password { get; set; }
+
+        [Required]
+        public string ConfigPassword { get; set; }
+
+        
+        public string MasterPassword { get; set; }
+
+        [Required]
+        public string Role { get; set; }
+    }
+
+    public class SignUpResponse
+    {
+        public bool IsSuccess { get; set; }
+        public string Message { get; set; }
+    }
+}
+
+
+Retail Product Management BE
+
+Startup.cs
+using CommonLayer;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.HttpsPolicy;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using Microsoft.OpenApi.Models;
+using RepositoryLayers.Interface;
+using RepositoryLayers.Services;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading.Tasks;
+
+namespace EShoppingApplication_BE
+{
+    public class Startup
+    {
+        public Startup(IConfiguration configuration)
+        {
+            Configuration = configuration;
+        }
+
+        public IConfiguration Configuration { get; }
+
+        // This method gets called by the runtime. Use this method to add services to the container.
+        public void ConfigureServices(IServiceCollection services)
+        {
+
+            services.AddControllers();
+            services.AddSwaggerGen(c =>
+            {
+                c.SwaggerDoc("v1", new OpenApiInfo { Title = "EShoppingApplication_BE", Version = "v1" });
+            });
+
+            services.AddDbContext<ApplicationDbContext>(option => option.UseSqlServer(Configuration["ConnectionStrings:DBSettingConnection"]));
+
+            #region
+            services.AddScoped<IAuthRL, AuthRL>();
+            services.AddScoped<ICardRL, CardRL>();
+            services.AddScoped<IProductRL, ProductRL>();
+            services.AddScoped<IWishListRL, WishListRL>();
+            services.AddScoped<IFeedbackRL, FeedbackRL>();
+            //services.AddScoped<SqlQueries>();
+            #endregion
+        }
+
+        // This method gets called by the runtime. Use this method to configure the HTTP request pipeline.
+        public void Configure(IApplicationBuilder app, IWebHostEnvironment env)
+        {
+            if (env.IsDevelopment())
+            {
+                app.UseDeveloperExceptionPage();
+                app.UseSwagger();
+                app.UseSwaggerUI(c => c.SwaggerEndpoint("/swagger/v1/swagger.json", "EShoppingApplication_BE v1"));
+            }
+
+            app.UseHttpsRedirection();
+
+            app.UseRouting();
+
+            app.UseAuthorization();
+
+            #region Cors
+
+            app.UseCors();
+            app.UseCors(builder =>
+            {
+                builder
+                .AllowAnyOrigin()
+                .AllowAnyMethod()
+                .AllowAnyHeader();
+            });
+
+            #endregion
+
+            app.UseEndpoints(endpoints =>
+            {
+                endpoints.MapControllers();
+            });
+        }
+    }
+}
+
+Program.cs
+
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading.Tasks;
+
+namespace EShoppingApplication_BE
+{
+    public class Program
+    {
+        public static void Main(string[] args)
+        {
+            CreateHostBuilder(args).Build().Run();
+        }
+
+        public static IHostBuilder CreateHostBuilder(string[] args) =>
+            Host.CreateDefaultBuilder(args)
+                .ConfigureWebHostDefaults(webBuilder =>
+                {
+                    webBuilder.UseStartup<Startup>();
+                });
+    }
+}
+
+appsettings.cs
+{
+  "ConnectionStrings": {
+    "DBSettingConnection": "Server=localhost;Database=RetailProductManagementEF;Trusted_Connection=True;MultipleActiveResultSets=True;"
+  },
+  "Jwt": {
+    "Key": "ThisismySecretKey",
+    "Issuer": "https://localhost:44381/",
+    "Audiance": "https://localhost:44381/"
+  },
+  "CloudinarySettings": {
+    "CloudName": "dzavgoc9w",
+    "ApiKey": "842688657531372",
+    "ApiSecret": "-djtDm1NRXVtjZ3L-HGaLfYnNBw"
+  },
+  "Logging": {
+    "LogLevel": {
+      "Default": "Information",
+      "Microsoft": "Warning",
+      "Microsoft.Hosting.Lifetime": "Information"
+    }
+  },
+  "AllowedHosts": "*"
+}
+
+
+Folder(Controllers)
+AuthController.cs
+
+using CommonLayer.Models;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
+using Microsoft.IdentityModel.Tokens;
+using RepositoryLayers.Interface;
+using System;
+using System.Collections.Generic;
+using System.IdentityModel.Tokens.Jwt;
+using System.Linq;
+using System.Security.Claims;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace EShoppingApplication_BE.Controllers
+{
+    [Route("api/[controller]/[Action]")]
+    [ApiController]
+    public class AuthController : ControllerBase
+    {
+        private readonly IAuthRL _authRL;
+        private readonly ILogger<AuthController> _logger;
+        private readonly IConfiguration _configuration;
+        public AuthController(IAuthRL authRL, IConfiguration configuration, ILogger<AuthController> logger)
+        {
+            _authRL = authRL;
+            _logger = logger;
+            _configuration = configuration;
+        }
+
+        [HttpPost]
+        public async Task<ActionResult> SignUp(SignUpRequest request)
+        {
+            SignUpResponse response = new SignUpResponse();
+            try
+            {
+                _logger.LogInformation($"SignUp Calling In AdminController.... Time : {DateTime.Now}");
+                response = await _authRL.SignUp(request);
+            }
+            catch (Exception ex)
+            {
+                response.IsSuccess = false;
+                response.Message = ex.Message;
+                _logger.LogError("Exception Occur In AuthController : Message : ", ex.Message);
+            }
+
+            return Ok(response);
+        }
+
+        [HttpPost]
+        public async Task<ActionResult> SignIn(SignInRequest request)
+        {
+            SignInResponse response = new SignInResponse();
+            try
+            {
+                _logger.LogInformation($"SignIn Calling In AdminController.... Time : {DateTime.Now}");
+                response = await _authRL.SignIn(request);
+                if (response.IsSuccess)
+                {
+                    string Type = string.Empty;
+                    if (response.data.Role.Equals("manager"))
+                    {
+                        Type = "Manager Login";
+                    }
+                    else
+                    {
+                        Type = "Customer Login";
+                    }
+                    response = await CreateToken(response, Type);
+                }
+            }
+            catch (Exception ex)
+            {
+                response.IsSuccess = false;
+                response.Message = ex.Message;
+                _logger.LogError("Exception Occur In AuthController : Message : ", ex.Message);
+
+            }
+
+            return Ok(response);
+        }
+        
+        [HttpPost]
+        public async Task<ActionResult> AddCustomerDetail(AddCustomerDetailRequest request)
+        {
+            AddCustomerDetailResponse response = new AddCustomerDetailResponse();
+            try
+            {
+                _logger.LogInformation($"AddCustomerDetail Calling In AdminController.... Time : {DateTime.Now}");
+                response = await _authRL.AddCustomerDetail(request);
+
+            }
+            catch (Exception ex)
+            {
+                response.IsSuccess = false;
+                response.Message = ex.Message;
+                _logger.LogError("Exception Occur In AuthController : Message : ", ex.Message);
+
+            }
+
+            return Ok(response);
+        }
+
+        [HttpGet]
+        public async Task<ActionResult> GetCustomerDetail([FromQuery]int UserID)
+        {
+            GetCustomerDetailResponse response = new GetCustomerDetailResponse();
+            try
+            {
+                _logger.LogInformation($"AddCustomerDetail Calling In AdminController.... Time : {DateTime.Now}");
+                response = await _authRL.GetCustomerDetail(UserID);
+
+            }
+            catch (Exception ex)
+            {
+                response.IsSuccess = false;
+                response.Message = ex.Message;
+                _logger.LogError("Exception Occur In AuthController : Message : ", ex.Message);
+
+            }
+
+            return Ok(response);
+        }
+
+
+        [HttpPost]
+        public async Task<ActionResult> CustomerList(CustomerListRequest request)
+        {
+            CustomerListResponse response = new CustomerListResponse();
+            try
+            {
+                _logger.LogInformation($"CustomerList Calling In AdminController.... Time : {DateTime.Now}");
+                response = await _authRL.CustomerList(request);
+                
+            }
+            catch (Exception ex)
+            {
+                response.IsSuccess = false;
+                response.Message = ex.Message;
+                _logger.LogError("Exception Occur In AuthController : Message : ", ex.Message);
+
+            }
+
+            return Ok(response);
+        }
+
+        [HttpPost]
+        public async Task<ActionResult> AddCustomerAdderess(AddCustomerAdderessRequest request)
+        {
+            AddCustomerAdderessResponse response = new AddCustomerAdderessResponse();
+            try
+            {
+                _logger.LogInformation($"AddCustomerAdderess Calling In AdminController.... Time : {DateTime.Now}");
+                response = await _authRL.AddCustomerAdderess(request);
+
+            }
+            catch (Exception ex)
+            {
+                response.IsSuccess = false;
+                response.Message = ex.Message;
+                _logger.LogError("Exception Occur In AuthController : Message : ", ex.Message);
+
+            }
+
+            return Ok(response);
+        }
+
+        [HttpGet]
+        public async Task<ActionResult> GetCustomerAdderess([FromQuery]int UserID)
+        {
+            GetCustomerAdderessResponse response = new GetCustomerAdderessResponse();
+            try
+            {
+                _logger.LogInformation($"GetCustomerAdderess Calling In AdminController.... Time : {DateTime.Now}");
+                response = await _authRL.GetCustomerAdderess(UserID);
+
+            }
+            catch (Exception ex)
+            {
+                response.IsSuccess = false;
+                response.Message = ex.Message;
+                _logger.LogError("Exception Occur In AuthController : Message : ", ex.Message);
+
+            }
+
+            return Ok(response);
+        }
+
+
+
+        //Method to create JWT token
+        private async Task<SignInResponse> CreateToken(SignInResponse request, string Type)
+        {
+            try
+            {
+                var symmetricSecuritykey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_configuration["Jwt:Key"]));
+                var signingCreds = new SigningCredentials(symmetricSecuritykey, SecurityAlgorithms.HmacSha256);
+
+                var claims = new List<Claim>();
+                claims.Add(new Claim(ClaimTypes.Role, request.data.Role));
+                claims.Add(new Claim("UserName", request.data.UserName.ToString()));
+                claims.Add(new Claim("UserId", request.data.UserId.ToString()));
+                claims.Add(new Claim("TokenType", Type));
+
+                var token = new JwtSecurityToken(_configuration["Jwt:Issuer"],
+                    _configuration["Jwt:Audiance"],
+                    claims,
+                    expires: DateTime.Now.AddHours(1),
+                    signingCredentials: signingCreds);
+                request.data.Token = new JwtSecurityTokenHandler().WriteToken(token);
+
+            }
+            catch (Exception ex)
+            {
+                request.IsSuccess = false;
+                request.Message = "Exception Occur In Token Creation : Message : " + ex.Message;
+                _logger.LogError("Exception Occur In Token Creation : Message : ", ex.Message);
+            }
+            return request;
+        }
+
+    }
+}
+
+Properties(Folder)
+launchSettings.json
+{
+  "$schema": "http://json.schemastore.org/launchsettings.json",
+  "iisSettings": {
+    "windowsAuthentication": false,
+    "anonymousAuthentication": true,
+    "iisExpress": {
+      "applicationUrl": "http://localhost:18746",
+      "sslPort": 44327
+    }
+  },
+  "profiles": {
+    "IIS Express": {
+      "commandName": "IISExpress",
+      "launchBrowser": true,
+      "launchUrl": "swagger",
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Development"
+      }
+    },
+    "EShoppingApplication_BE": {
+      "commandName": "Project",
+      "dotnetRunMessages": "true",
+      "launchBrowser": true,
+      "launchUrl": "swagger",
+      "applicationUrl": "https://localhost:5001;http://localhost:5000",
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Development"
+      }
+    }
+  }
+}
+
+Folder(Common Utility)
+CommonUtility.cs
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Security.Cryptography;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace Inventory_Management_System_BE.Common_Utility
+{
+    public class CommonUtility
+    {
+        private static string Kernel = "VTMaster";
+
+        public static string Encrypt(string originalString)
+        {
+            byte[] bytes = ASCIIEncoding.ASCII.GetBytes(Kernel);
+            if (String.IsNullOrEmpty(originalString))
+            {
+                throw new ArgumentNullException("The string which needs to be encrypted can not be null.");
+            }
+
+            var cryptoProvider = new DESCryptoServiceProvider();
+            var memoryStream = new MemoryStream();
+            var cryptoStream = new CryptoStream(memoryStream, cryptoProvider.CreateEncryptor(bytes, bytes),
+                CryptoStreamMode.Write);
+            var writer = new StreamWriter(cryptoStream);
+            writer.Write(originalString);
+            writer.Flush();
+            cryptoStream.FlushFinalBlock();
+            writer.Flush();
+            return Convert.ToBase64String(memoryStream.GetBuffer(), 0, (int)memoryStream.Length);
+        }
+
+        public static string Decrypt(string encryptedString)
+        {
+            byte[] bytes = ASCIIEncoding.ASCII.GetBytes(Kernel);
+            if (String.IsNullOrEmpty(encryptedString))
+            {
+                throw new ArgumentNullException("The string which needs to be decrypted can not be null.");
+            }
+
+            var cryptoProvider = new DESCryptoServiceProvider();
+            var memoryStream = new MemoryStream(Convert.FromBase64String(encryptedString));
+            var cryptoStream = new CryptoStream(memoryStream, cryptoProvider.CreateDecryptor(bytes, bytes),
+                CryptoStreamMode.Read);
+            var reader = new StreamReader(cryptoStream);
+            return reader.ReadToEnd();
+        }
+
+    }
+}
+
+
